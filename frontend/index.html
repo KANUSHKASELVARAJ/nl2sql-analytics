@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>NL2NoSQL</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>Natural Language → NoSQL</h1>
+
+        <p class="subtitle">
+            Ask questions about your e-commerce data in plain English.
+        </p>
+
+        <div class="search-box">
+
+            <input
+                type="text"
+                id="question"
+                placeholder="Example: Find products above 100"
+            >
+
+            <button onclick="askQuestion()">
+                Ask
+            </button>
+
+        </div>
+
+
+        <div class="examples">
+
+            <button onclick="setQuestion('Find customers from Asia')">
+                Customers from Asia
+            </button>
+
+            <button onclick="setQuestion('Find products above 100')">
+                Products above 100
+            </button>
+
+            <button onclick="setQuestion('How many customers are there?')">
+                Count customers
+            </button>
+
+            <button onclick="setQuestion('Show the most expensive products')">
+                Most expensive products
+            </button>
+
+        </div>
+
+
+        <div id="loading" class="hidden">
+            Processing...
+        </div>
+
+
+        <div id="error" class="error hidden"></div>
+
+
+        <div id="query-section" class="card hidden">
+
+            <h2>Generated NoSQL Query</h2>
+
+            <pre id="query"></pre>
+
+        </div>
+
+
+        <div id="result-section" class="card hidden">
+
+            <h2>Results</h2>
+
+            <div id="result"></div>
+
+        </div>
+
+    </div>
+
+
+    <script src="script.js"></script>
+
+</body>
+
+</html>

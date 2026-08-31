@@ -1,67 +1,255 @@
-"""
-Stage 1: turns a natural-language question into SQL using Claude's
-structured output (tool use), constrained to a fixed JSON schema.
-"""
 import os
-import anthropic
-from schema import SCHEMA_DESCRIPTION
+import json
+import re
 
-MODEL = "claude-sonnet-5"
+from dotenv import load_dotenv
+from google import genai
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+from schema import SCHEMA
 
-SYSTEM_PROMPT = f"""You are a SQL generation assistant for a DuckDB analytics database.
-Given a user's natural language question, generate a single read-only SQL query
-that answers it, using ONLY the tables and columns described below.
 
-{SCHEMA_DESCRIPTION}
+# Load .env
+load_dotenv()
 
-Rules:
-- Only generate SELECT statements. Never generate INSERT, UPDATE, DELETE, DROP,
-  ALTER, CREATE, or any other statement that modifies data or schema.
-- Only reference tables/columns that exist in the schema above.
-- If the question cannot be answered with the available schema, set "sql" to
-  an empty string and explain why in "explanation".
-- Always call the `generate_sql` tool with your result — do not respond in plain text.
+# Gemini client
+client = genai.Client(
+    api_key=os.getenv("GEMINI_API_KEY")
+)
+
+
+SYSTEM_PROMPT = f"""
+You are a Natural Language to MongoDB query generator.
+
+Your job is to convert an English question into a SAFE MongoDB query.
+
+DATABASE SCHEMA:
+
+{SCHEMA}
+
+
+Return ONLY valid JSON.
+
+The JSON must have exactly this structure:
+
+{{
+    "collection": "collection_name",
+    "operation": "find",
+    "filter": {{}},
+    "sort": {{}},
+    "limit": 10,
+    "explanation": "short explanation"
+}}
+
+
+ALLOWED COLLECTIONS:
+
+customers
+products
+orders
+order_items
+
+
+ALLOWED OPERATIONS:
+
+find
+count
+
+
+ALLOWED OPERATORS:
+
+$gt
+$gte
+$lt
+$lte
+$eq
+$ne
+
+
+SORT:
+
+1 = ascending
+-1 = descending
+
+
+EXAMPLE 1
+
+Question:
+Find customers from Asia
+
+Output:
+{{
+    "collection": "customers",
+    "operation": "find",
+    "filter": {{
+        "region": "Asia"
+    }},
+    "sort": {{}},
+    "limit": 10,
+    "explanation": "Finds customers whose region is Asia."
+}}
+
+
+EXAMPLE 2
+
+Question:
+Find products above 100
+
+Output:
+{{
+    "collection": "products",
+    "operation": "find",
+    "filter": {{
+        "price": {{
+            "$gt": 100
+        }}
+    }},
+    "sort": {{}},
+    "limit": 10,
+    "explanation": "Finds products with price greater than 100."
+}}
+
+
+EXAMPLE 3
+
+Question:
+Find products below 50
+
+Output:
+{{
+    "collection": "products",
+    "operation": "find",
+    "filter": {{
+        "price": {{
+            "$lt": 50
+        }}
+    }},
+    "sort": {{}},
+    "limit": 10,
+    "explanation": "Finds products with price less than 50."
+}}
+
+
+EXAMPLE 4
+
+Question:
+How many customers are there?
+
+Output:
+{{
+    "collection": "customers",
+    "operation": "count",
+    "filter": {{}},
+    "sort": {{}},
+    "limit": 0,
+    "explanation": "Counts the total number of customers."
+}}
+
+
+EXAMPLE 5
+
+Question:
+Show the most expensive products
+
+Output:
+{{
+    "collection": "products",
+    "operation": "find",
+    "filter": {{}},
+    "sort": {{
+        "price": -1
+    }},
+    "limit": 10,
+    "explanation": "Shows products sorted by price from highest to lowest."
+}}
+
+
+EXAMPLE 6
+
+Question:
+Show the cheapest products
+
+Output:
+{{
+    "collection": "products",
+    "operation": "find",
+    "filter": {{}},
+    "sort": {{
+        "price": 1
+    }},
+    "limit": 10,
+    "explanation": "Shows products sorted by price from lowest to highest."
+}}
+
+
+EXAMPLE 7
+
+Question:
+Find completed orders
+
+Output:
+{{
+    "collection": "orders",
+    "operation": "find",
+    "filter": {{
+        "status": "completed"
+    }},
+    "sort": {{}},
+    "limit": 10,
+    "explanation": "Finds orders whose status is completed."
+}}
+
+
+IMPORTANT SECURITY RULES:
+
+Never generate SQL.
+
+Never generate delete operations.
+
+Never generate update operations.
+
+Never generate insert operations.
+
+Never generate drop operations.
+
+Never generate raw JavaScript.
+
+Only generate the allowed collections and operations.
+
+Return JSON only.
 """
 
-SQL_TOOL = {
-    "name": "generate_sql",
-    "description": "Return the generated SQL query and a short explanation of what it does.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "sql": {
-                "type": "string",
-                "description": "The SQL SELECT query that answers the question, or empty string if impossible.",
-            },
-            "explanation": {
-                "type": "string",
-                "description": "A short (1-2 sentence) explanation of what the query does, or why it can't be answered.",
-            },
-        },
-        "required": ["sql", "explanation"],
-    },
-}
 
+def generate_query(question):
 
-def generate_sql(question: str) -> dict:
-    """Calls Claude to turn `question` into a SQL query + explanation."""
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=1000,
-        system=SYSTEM_PROMPT,
-        tools=[SQL_TOOL],
-        tool_choice={"type": "tool", "name": "generate_sql"},
-        messages=[{"role": "user", "content": question}],
+    """
+    Convert natural language question
+    into a structured MongoDB query.
+    """
+
+    prompt = SYSTEM_PROMPT + f"""
+
+USER QUESTION:
+{question}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=prompt
     )
 
-    for block in response.content:
-        if block.type == "tool_use" and block.name == "generate_sql":
-            return {
-                "sql": block.input.get("sql", ""),
-                "explanation": block.input.get("explanation", ""),
-            }
+    text = response.text.strip()
 
-    # Shouldn't happen since tool_choice forces the tool, but just in case
-    return {"sql": "", "explanation": "Model did not return a structured result."}
+    # Remove markdown code fences if Gemini returns them
+    text = re.sub(r"```json", "", text)
+    text = re.sub(r"```", "", text)
+
+    text = text.strip()
+
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        raise ValueError(
+            "Gemini returned invalid JSON:\n" + text
+        )
+
+    return result

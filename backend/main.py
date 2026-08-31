@@ -1,60 +1,62 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
-from query_generator import generate_sql
-from db import run_query, UnsafeQueryError
-
-app = FastAPI(title="NL-to-SQL Analytics (Stage 1)")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from query_generator import generate_query
+from query_executor import execute_query
 
 
-class AskRequest(BaseModel):
-    question: str
+app = Flask(__name__)
+
+CORS(app)
 
 
-class AskResponse(BaseModel):
-    question: str
-    sql: str
-    explanation: str
-    columns: list[str]
-    rows: list[dict]
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "message": "NL2NoSQL API is running"
+    })
 
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.post("/ask", response_model=AskResponse)
-def ask(req: AskRequest):
-    if not req.question.strip():
-        raise HTTPException(status_code=400, detail="Question cannot be empty.")
-
-    generated = generate_sql(req.question)
-    sql = generated["sql"]
-    explanation = generated["explanation"]
-
-    if not sql:
-        raise HTTPException(status_code=422, detail=explanation or "Could not generate SQL for this question.")
+@app.route("/ask", methods=["POST"])
+def ask():
 
     try:
-        result = run_query(sql)
-    except UnsafeQueryError as e:
-        raise HTTPException(status_code=400, detail=f"Rejected unsafe query: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Query execution failed: {e}")
+        data = request.get_json()
 
-    return AskResponse(
-        question=req.question,
-        sql=sql,
-        explanation=explanation,
-        columns=result["columns"],
-        rows=result["rows"],
+        if not data or "question" not in data:
+            return jsonify({
+                "error": "Question is required"
+            }), 400
+
+        question = data["question"].strip()
+
+        if not question:
+            return jsonify({
+                "error": "Question cannot be empty"
+            }), 400
+
+        # Step 1: Natural Language → NoSQL
+        query = generate_query(question)
+
+        # Step 2: NoSQL → MongoDB
+        result = execute_query(query)
+
+        return jsonify({
+            "question": question,
+            "query": query,
+            "result": result
+        })
+
+    except Exception as e:
+
+        return jsonify({
+            "error": str(e)
+        }), 500
+
+
+if __name__ == "__main__":
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=True
     )
